@@ -81,8 +81,9 @@
 #' For t-statistics, this depedends on the type of t-test performed.
 #' @param alternative The estimation algorithm used for estimation of the alternative
 #' densitiy. "Grenander" corresponds to the method implemented in fdrtool, while
-#' "log-concave" is new method introduced in the package
-#' @param cutoff.method one of "fndr" (default), "pct0", "locfdr".
+#' "log-concave" is new method introduced in the package. At the moment the FDR values
+#' are computed using both approaches.
+#' @param cutoff.method one of "fndr" (default), "pct0", "locfdr", or smoothing.
 #' @param pct0 fraction of data used for fitting null model - only if
 #' \code{cutoff.method}="pct0"
 #' @param color.figure determines whether a color figure or a black and white
@@ -250,6 +251,12 @@ if(!theo){
 
   } else {
 
+
+   if( (statistic %in% c("correlation", "studentt")) & is.null(scale_param) ) {
+
+     stop(paste0("statistic is ", statistic, ", which needs a user specified scale_param for the theoretical null model"))
+
+     }
   scale_param <- switch(statistic,
            "normal" = 1,
            "correlation" = scale_param,
@@ -257,6 +264,13 @@ if(!theo){
            "studentt" = scale_param)
 
   pval <- nm$get.pval(x, scale_param)
+  x0 <- quantile(pval, probs=1-pct0)
+  try({
+    cf.out <- censored.fit(x=pval, cutoff=x0, statistic="pvalue")},
+    silent = TRUE)
+
+  eta0 = cf.out[1,3]
+
   }
 
 
@@ -313,6 +327,11 @@ if(!theo){
              statistic=statistic, param=cf.out,
 		null.model=nm[c("f0",	"F0","get.pval")],
 		alternative = alternative)
+
+  if(theo){
+
+    result$param <- cbind(result$param[, 1:4, drop = FALSE], scale_param)
+    }
 
   if (plot)
   {

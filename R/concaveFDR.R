@@ -1,5 +1,3 @@
-### concaveFDR.R  (2013-11-19)
-###
 ###    Estimate (Local) False Discovery Rates For Diverse Test Statistics
 ###    Using log--concave density estimation, main function. It is based
 ###    on code by Korbinian Strimmer.
@@ -26,7 +24,7 @@
 #' Estimate (Local) False Discovery Rates For Diverse Test Statistics
 #' Using Log-Concave Densities
 #'
-#' \code{fdrtool} takes a vector of z-scores (or of correlations, p-values, or
+#' \code{concaveFDR} takes a vector of z-scores (or of correlations, p-values, or
 #' t-statistics), and estimates for each case both the tail area-based Fdr as
 #' well as the density-based fdr (=q-value resp. local false discovery rate).
 #' The parameters of the null distribution are estimated adaptively from the
@@ -41,15 +39,26 @@
 #' \code{cutoff.method} is "pct0" then a specified quantile (default value:
 #' 0.75) of the data is used as the cutoff point.  If \code{cutoff.method}
 #' equals "locfdr" then the heuristic of the "locfdr" package (version 1.1-6)
-#' is employed to find the cutoff (z-scores and correlations only).  \item The
+#' is employed to find the cutoff (z-scores and correlations only).
+#' If \code{cutoff.method} is "smoothing" the a smoothed b-spline is
+#' fitted to the eta0 estimates at various cutoff points and flat regions
+#' are found by inspecting local minima of the smoothed b-spline curve.
+#'
+#' \item The
 #' parameters of the null model are estimated from the data using
 #' \code{\link{censored.fit}}. This results in estimates for scale parameters
 #' und and proportion of null values (\code{eta0}). Not that choosing theo = TRUE
 #' will results in using the theoretical null model without a scale parameter.
+#'
 #'  \item Subsequently the
-#' corresponding p-values are computed, and a modified \code{\link{grenander}}
+#' corresponding p-values are computed, and a modified \code{\link{grenander}} or
+#' log-concave density estimation
 #' algorithm is employed to obtain the overall density and distribution
-#' function (note that this respects the estimated \code{eta0}).  \item
+#' function (note that this respects the estimated \code{eta0}). The choice
+#' of the density estimation algorithm can be made by using the \code{alternative}
+#' argument.
+#'
+#'   \item
 #' Finally, q-values and local fdr values are computed for each case.  }
 #'
 #' The assumed null models all have (except for p-values) one free scale
@@ -62,6 +71,17 @@
 #' @param plot plot a figure with estimated densities, distribution functions,
 #' and (local) false discovery rates.
 #' @param verbose print out status messages.
+#' @param theo Should the theoretical null model be used? In this case no null
+#' model scale parameters (e.g. sigma for z-scores) are estimated. Note that the df and
+#' the kappa parameters for t-statistics and the correlation statistics have to
+#' be set manually as they depeden on the original sample sizes.
+#' @param scale_param scale parameter used when calculating the statistics, only needs to
+#' be specified if \code{theo} is set to TRUE and the statistics are t-scores
+#' or correlations. See \code{\link{dcor0}} for details on how to set this for correlations.
+#' For t-statistics, this depedends on the type of t-test performed.
+#' @param alternative The estimation algorithm used for estimation of the alternative
+#' densitiy. "Grenander" corresponds to the method implemented in fdrtool, while
+#' "log-concave" is new method introduced in the package
 #' @param cutoff.method one of "fndr" (default), "pct0", "locfdr".
 #' @param pct0 fraction of data used for fitting null model - only if
 #' \code{cutoff.method}="pct0"
@@ -86,7 +106,8 @@
 #' and tail area- based false discovery rates.  Bioinformatics 24: 1461-1462.
 #' Available from
 #' \url{http://bioinformatics.oxfordjournals.org/cgi/content/abstract/24/12/1461}.
-#' @keywords htest
+#'
+#'
 #' @examples
 #'
 #' # load "fdrtool" library and p-values
@@ -97,12 +118,12 @@
 #' # estimate fdr and Fdr from p-values
 #'
 #' data(pvalues)
-#' fdr = fdrtool(pvalues, statistic="pvalue")
-#' fdr$qval # estimated Fdr values
-#' fdr$lfdr # estimated local fdr
+#' fdr <- concaveFDR(pvalues, statistic="pvalue")
+#' fdr$qval.log # estimated Fdr values using log-concave density estimation
+#' fdr$qval.gr # estimated local fdr using Grenander density estimation
 #'
 #' # the same but with black and white figure
-#' fdr = fdrtool(pvalues, statistic="pvalue", color.figure=FALSE)
+#' fdr <- concaveFDR(pvalues, statistic="pvalue", color.figure=FALSE)
 #'
 #'
 #' # estimate fdr and Fdr from z-scores
@@ -111,10 +132,12 @@
 #' n = 500
 #' z = rnorm(n, sd=sd.true)
 #' z = c(z, runif(30, 5, 10)) # add some contamination
-#' fdr = fdrtool(z)
+#' fdr =  concaveFDR(z)
 #'
 #' # you may change some parameters of the underlying functions
-#' fdr = fdrtool(z, cutoff.method="pct0", pct0=0.9)
+#' fdr =  concaveFDR(z, cutoff.method="pct0", pct0=0.9)
+#'
+#'
 #'
 #'
 #' @export
@@ -126,7 +149,7 @@
 
 concaveFDR = function(x,
   statistic=c("normal", "correlation", "pvalue"),
-  plot=TRUE, color.figure=TRUE, verbose=TRUE, theo = FALSE,
+  plot=TRUE, color.figure=TRUE, verbose=TRUE, theo = FALSE, scale_param = NULL,
   alternative = c("grenander", "log-concave"),
   cutoff.method=c("fndr", "pct0", "locfdr", "smoothing"),
   pct0=0.75)
@@ -143,10 +166,7 @@ concaveFDR = function(x,
     if (max(x) > 1 | min(x) < 0)
       stop("input p-values must all be in the range 0 to 1!")
   }
-#  if(!(alternative %in% c("grenander", "log-concave"))){
-#	 stop( "alternative must be \"grenander\" or \"log-concave\" ")
-#  }
-#
+
 #### step 1 ####
 
   if(verbose) cat("Step 1... determine cutoff point\n")
@@ -201,15 +221,13 @@ concaveFDR = function(x,
 
 #### step 2 ####
 
+if(!theo){
+
   if(verbose) cat("Step 2... estimate parameters of null distribution and eta0\n")
 
   try({
   cf.out <- censored.fit(x=x, cutoff=x0, statistic=statistic)},
   silent = TRUE)
-# cf.out looks as follows for p-values
-#     cutoff N0      eta0    eta0.var
-#[1,]   0.96 64 0.3730473 0.002141996
-# the other test statistics have two more colums containing the scale parameter
 
   if (statistic=="pvalue")
     scale.param = NULL
@@ -218,13 +236,28 @@ concaveFDR = function(x,
 
   eta0 = cf.out[1,3]
 
-#### step 2 ####
+}
+
+#### step 3 ####
 
   if(verbose) cat("Step 3... compute p-values and estimate empirical PDF/CDF\n")
 
-  nm = fdrtool:::get.nullmodel(statistic)
-  pval = nm$get.pval(x, scale.param)
+  nm <- fdrtool:::get.nullmodel(statistic)
 
+  if(!theo){
+
+  pval <- nm$get.pval(x, scale.param)
+
+  } else {
+
+  scale_param <- switch(statistic,
+           "normal" = 1,
+           "correlation" = scale_param,
+           "pvalue" = NULL,
+           "studentt" = scale_param)
+
+  pval <- nm$get.pval(x, scale_param)
+  }
 
 
   # determine cumulative empirical distribution function (pvalues)
